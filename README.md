@@ -17,10 +17,12 @@ python3 gui.py --fullscreen
 ```
 
 For a desktop window, run `python3 gui.py`. Escape exits fullscreen; F11 toggles
-it. No pip dependencies or internet connection are required for the UI.
+it.
 
-Room values are clearly labeled demo data by default. An optional DHT22 bridge
-is included. AI guidance, calls, and emergency detection are not implemented.
+When running on a Raspberry Pi with a DHT22 sensor connected to GPIO4 (pin D4),
+the app automatically detects the sensor and displays live temperature and
+humidity. If the sensor is not connected or when running on a desktop, it
+gracefully displays labeled demo values (or pass `--demo` to force demo mode).
 See [the Haven setup guide](haven/README.md) for sensor setup, local storage,
 privacy controls, limitations, and verification instructions.
 

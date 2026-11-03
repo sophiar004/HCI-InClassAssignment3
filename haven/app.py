@@ -1,6 +1,7 @@
 """Run with python3 -m haven.app. Tkinter is the only UI dependency."""
 
 import argparse
+import os
 import tkinter as tk
 from datetime import datetime
 
@@ -16,7 +17,7 @@ AMBER = "#80500C"
 
 
 class Haven(tk.Tk):
-    def __init__(self, fullscreen=False, store=None):
+    def __init__(self, fullscreen=False, store=None, demo=False, pin="D4"):
         super().__init__()
         # Keep the same physical pixel layout across desktop/Pi font DPI defaults.
         self.tk.call("tk", "scaling", 96 / 72)
@@ -27,12 +28,26 @@ class Haven(tk.Tk):
         self.attributes("-fullscreen", fullscreen)
         self.bind("<Escape>", lambda event: self.attributes("-fullscreen", False))
         self.bind("<F11>", lambda event: self.attributes("-fullscreen", not self.attributes("-fullscreen")))
+        self.protocol("WM_DELETE_WINDOW", self.close_app)
         self.store = store or Store()
         self.page = "Home"
         self.dialog = None
         self.climate_labels = []
         self.nav_buttons = {}
         self.toast_job = None
+        self.tick_job = None
+
+        self.sensor_reader = None
+        if not demo and not os.environ.get("HAVEN_SENSOR_FILE"):
+            try:
+                from sensor.dht22_reader import DHT22Reader
+                reader = DHT22Reader(pin=pin, use_pulseio=False)
+                if reader.sensor is not None:
+                    self.sensor_reader = reader
+                    from haven.model import set_live_sensor_reader
+                    set_live_sensor_reader(reader)
+            except Exception:
+                pass
 
         header = tk.Frame(self, bg=BG, height=64)
         header.pack(fill="x", padx=20)
@@ -277,20 +292,53 @@ class Haven(tk.Tk):
         self.feedback.configure(text=message)
         self.toast_job = self.after(10000, lambda: self.feedback.configure(text=""))
 
+    def close_app(self, event=None):
+        self.destroy()
+
+    def destroy(self):
+        if getattr(self, "tick_job", None):
+            try:
+                self.after_cancel(self.tick_job)
+            except Exception:
+                pass
+            self.tick_job = None
+        if getattr(self, "toast_job", None):
+            try:
+                self.after_cancel(self.toast_job)
+            except Exception:
+                pass
+            self.toast_job = None
+        if getattr(self, "sensor_reader", None):
+            try:
+                self.sensor_reader.close()
+            except Exception:
+                pass
+            from haven.model import set_live_sensor_reader
+            set_live_sensor_reader(None)
+            self.sensor_reader = None
+        super().destroy()
+
     def update_climate(self):
         if not self.climate_labels:
             return
         source, temp, humidity, status = self.climate_labels
         reading = read_climate()
-        source.configure(text=reading["source"])
+        if reading.get("source") == "Live sensor":
+            source.configure(text="● LIVE SENSOR", fg=TEAL)
+        else:
+            source.configure(text=reading["source"], fg=MUTED)
+
         if not reading["available"]:
-            temp.configure(text="-- °C")
-            humidity.configure(text="Humidity unavailable")
-            status.configure(text="Check sensor connection.\nNo recent reading received.", fg=AMBER)
+            temp.configure(text="--.- °C")
+            humidity.configure(text="--.- % RH")
+            if reading.get("source") == "Waiting for sensor reading...":
+                status.configure(text="Waiting for sensor reading...", fg=AMBER)
+            else:
+                status.configure(text="Check sensor connection.\nNo recent reading received.", fg=AMBER)
             return
         t, h = reading["temperature"], reading["humidity"]
         temp.configure(text=f"{t:.1f} °C")
-        humidity.configure(text=f"{h:.0f}% humidity")
+        humidity.configure(text=f"{h:.1f}% humidity")
         # Informational prototype bands, not medical or hazard detection thresholds.
         message = "Room conditions are steady"
         if t < 18 or t > 28:
@@ -305,14 +353,16 @@ class Haven(tk.Tk):
         self.update_climate()
         if self.page in ("Home", "Reminders"):
             self.reminder_label.configure(text=self.store.reminder_status())
-        self.after(1000, self.tick)
+        self.tick_job = self.after(1000, self.tick)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Haven: local 800x480 touchscreen prototype")
     parser.add_argument("--fullscreen", action="store_true", help="Fill the Raspberry Pi display")
+    parser.add_argument("--demo", action="store_true", help="Force demo mode instead of reading live sensor")
+    parser.add_argument("--pin", default="D4", help="board pin name for DHT22 DATA (default: D4 = GPIO4)")
     args = parser.parse_args()
-    Haven(fullscreen=args.fullscreen).mainloop()
+    Haven(fullscreen=args.fullscreen, demo=args.demo, pin=args.pin).mainloop()
 
 
 if __name__ == "__main__":

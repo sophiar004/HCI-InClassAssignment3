@@ -70,26 +70,51 @@ class Store:
         return "At 8:00 AM" if datetime.now().hour < 8 else "Ready to check off"
 
 
+_live_reader = None
+
+
+def set_live_sensor_reader(reader):
+    global _live_reader
+    _live_reader = reader
+
+
+def get_live_sensor_reader():
+    return _live_reader
+
+
 def read_climate(path=None):
-    """Accept a local sensor bridge file, or show explicitly labeled demo values.
+    """Accept a local sensor bridge file, live DHT22 sensor, or show explicitly labeled demo values.
 
     A failed or old real reading never falls back to a simulated healthy reading.
     """
     path = path or os.environ.get("HAVEN_SENSOR_FILE")
-    if not path:
-        return {"temperature": 22.4, "humidity": 46.0, "source": "Demo data", "available": True}
-    try:
-        data = json.loads(Path(path).read_text())
-        temperature, humidity = data["temperature_c"], data["humidity_percent"]
-        if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
-               for v in (temperature, humidity)):
-            raise ValueError("Invalid numbers")
-        if not -40 <= temperature <= 80 or not 0 <= humidity <= 100:
-            raise ValueError("Out of sensor range")
-        timestamp = datetime.fromisoformat(data["timestamp"])
-        age = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
-        if age > 120 or age < -10:
-            raise ValueError("Stale timestamp")
-        return {"temperature": temperature, "humidity": humidity, "source": "Local sensor", "available": True}
-    except (OSError, ValueError, KeyError, TypeError):
-        return {"temperature": None, "humidity": None, "source": "Sensor unavailable", "available": False}
+    if path:
+        try:
+            data = json.loads(Path(path).read_text())
+            temperature, humidity = data["temperature_c"], data["humidity_percent"]
+            if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+                   for v in (temperature, humidity)):
+                raise ValueError("Invalid numbers")
+            if not -40 <= temperature <= 80 or not 0 <= humidity <= 100:
+                raise ValueError("Out of sensor range")
+            timestamp = datetime.fromisoformat(data["timestamp"])
+            age = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
+            if age > 120 or age < -10:
+                raise ValueError("Stale timestamp")
+            return {"temperature": temperature, "humidity": humidity, "source": "Local sensor", "available": True}
+        except (OSError, ValueError, KeyError, TypeError):
+            return {"temperature": None, "humidity": None, "source": "Sensor unavailable", "available": False}
+
+    if _live_reader is not None:
+        reading = _live_reader.get_reading()
+        if reading.get("available"):
+            return {
+                "temperature": reading["temperature"],
+                "humidity": reading["humidity"],
+                "source": reading.get("source", "Live sensor"),
+                "available": True,
+            }
+        source = reading.get("source", "Sensor unavailable")
+        return {"temperature": None, "humidity": None, "source": source, "available": False}
+
+    return {"temperature": 22.4, "humidity": 46.0, "source": "Demo data", "available": True}
