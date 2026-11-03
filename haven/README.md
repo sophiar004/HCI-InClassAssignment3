@@ -39,7 +39,7 @@ uses a consistent 96 DPI Tk font scale to keep the layout stable across systems.
 - Check-in: three choices with immediate feedback.
 - Activity: scrollable local history, up to 100 entries, only when enabled.
 - Settings: activity logging toggle, clear-history confirmation, and exit.
-- Help: first-run introduction, available again from Help & guide.
+- Help: five-step first-use tutorial, available again from Help & guide.
 
 The example reminder is fixed at 8 AM; medication editing, audible alarms,
 background reminders when the app is closed, caregiver calls, AI guidance,
@@ -80,7 +80,7 @@ Create an environment for the optional hardware libraries:
 ```bash
 sudo apt install python3-venv
 python3 -m venv --system-site-packages .venv-haven
-.venv-haven/bin/python -m pip install adafruit-blinka adafruit-circuitpython-dht
+.venv-haven/bin/python -m pip install -r requirements.txt
 .venv-haven/bin/python -m haven.dht22 --pin 4
 ```
 

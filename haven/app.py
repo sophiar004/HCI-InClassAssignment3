@@ -14,6 +14,31 @@ TEAL = "#176653"
 PALE = "#DCEBE1"
 AMBER = "#80500C"
 
+TUTORIAL_STEPS = (
+    ("Welcome to Haven",
+     "Haven is a local home companion for daily routines and room awareness.\n\n"
+     "Use the large buttons on the left to move between screens. You can open "
+     "this tutorial again anytime with Help & guide."),
+    ("Start on Home",
+     "Home shows the current time, room temperature and humidity, and your next "
+     "daily reminder.\n\n"
+     "Look for Local sensor when the DHT22 is connected. Demo data means Haven "
+     "is showing sample values. Sensor unavailable means the connection needs attention."),
+    ("Use a reminder",
+     "Open Reminders, then choose Mark as taken only after completing the task. "
+     "Haven asks you to confirm and lets you undo mistakes.\n\n"
+     "Choose In 10 minutes when you need more time."),
+    ("Complete a check-in",
+     "Open Check-in and choose the option closest to how you feel. Haven confirms "
+     "your choice immediately.\n\n"
+     "Check-ins are saved in Activity only when local activity logging is enabled."),
+    ("Choose your privacy settings",
+     "Open Settings to turn local activity history on or off and clear saved history. "
+     "Haven keeps this prototype's data on the device.\n\n"
+     "Haven does not call a caregiver or emergency service, and it cannot detect "
+     "falls or stove hazards. Contact a trusted person when you need help."),
+)
+
 
 class Haven(tk.Tk):
     def __init__(self, fullscreen=False, store=None):
@@ -239,11 +264,24 @@ class Haven(tk.Tk):
         self.popup("Could not save changes", "Check that your local storage folder is writable.\nChanges in this session may be lost after closing.", [("Okay", lambda: None)])
 
     def guide(self):
-        self.popup("Welcome to Haven", "Home: see room conditions and your daily reminder.\nReminders: mark an example task done or snooze it.\nCheck-in: share how you feel with this device.\nSettings: control local activity history.\n\nSensor values are labeled demo until connected.\nHaven cannot detect falls, stove hazards, or emergencies.", [("Let's begin", self.finish_guide)])
+        self.tutorial(0)
+
+    def tutorial(self, step):
+        title, message = TUTORIAL_STEPS[step]
+        title = f"Step {step + 1} of {len(TUTORIAL_STEPS)}  |  {title}"
+        actions = []
+        if step:
+            actions.append(("Back", lambda: self.tutorial(step - 1)))
+        if step < len(TUTORIAL_STEPS) - 1:
+            actions.append(("Next", lambda: self.tutorial(step + 1)))
+        else:
+            actions.append(("Finish tutorial", self.finish_guide))
+        self.popup(title, message, actions)
 
     def finish_guide(self):
         self.store.state["onboarded"] = True
-        self.persist()
+        if self.persist():
+            self.toast("Tutorial complete. Open Help & guide to see it again.")
 
     def popup(self, title, message, actions):
         if self.dialog:

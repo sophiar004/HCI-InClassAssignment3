@@ -6,6 +6,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sensor.dht22_reader import create_sensor, read_sensor
+
 
 def main():
     parser = argparse.ArgumentParser(description="Read a DHT22 on a Raspberry Pi")
@@ -13,25 +15,20 @@ def main():
     parser.add_argument("--output", type=Path, default=Path.home() / ".haven" / "climate.json")
     args = parser.parse_args()
     try:
-        import board
-        import adafruit_dht
-    except ImportError:
-        parser.exit(1, "Install the optional sensor dependencies first; see haven/README.md.\n")
-    pin = getattr(board, f"D{args.pin}", None)
-    if pin is None:
-        parser.error("GPIO pin is not supported on this board")
-    sensor = adafruit_dht.DHT22(pin, use_pulseio=False)
+        # Bit-banging mode works across current Pi models and avoids PulseIn issues.
+        sensor = create_sensor(f"D{args.pin}", use_pulseio=False)
+    except (RuntimeError, ValueError) as error:
+        parser.error(str(error))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     try:
         while True:
             try:
-                temperature, humidity = sensor.temperature, sensor.humidity
-                if temperature is not None and humidity is not None:
-                    payload = {"temperature_c": temperature, "humidity_percent": humidity,
-                               "timestamp": datetime.now(timezone.utc).isoformat()}
-                    temporary = args.output.with_suffix(".tmp")
-                    temporary.write_text(json.dumps(payload, allow_nan=False))
-                    temporary.replace(args.output)
+                temperature, humidity = read_sensor(sensor, retries=1)
+                payload = {"temperature_c": temperature, "humidity_percent": humidity,
+                           "timestamp": datetime.now(timezone.utc).isoformat()}
+                temporary = args.output.with_suffix(".tmp")
+                temporary.write_text(json.dumps(payload, allow_nan=False))
+                temporary.replace(args.output)
             except (RuntimeError, ValueError) as error:
                 # DHT sensors occasionally miss reads. The UI detects stale data.
                 print(f"Read failed; retrying: {error}", flush=True)

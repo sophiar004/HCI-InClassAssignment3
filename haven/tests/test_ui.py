@@ -6,7 +6,7 @@ import tkinter as tk
 import unittest
 from pathlib import Path
 
-from haven.app import Haven
+from haven.app import Haven, TUTORIAL_STEPS
 from haven.model import Store
 
 
@@ -38,11 +38,15 @@ class InterfaceTests(unittest.TestCase):
                 self.assert_fits(self.app)
 
     def test_workflow_and_dialogs(self):
-        self.app.guide()
-        self.app.update()
-        self.assert_fits(self.app.dialog)
+        for step in range(len(TUTORIAL_STEPS)):
+            with self.subTest(tutorial_step=step + 1):
+                self.app.tutorial(step)
+                self.app.update()
+                self.assert_fits(self.app.dialog)
         self.app.dialog.destroy()
         self.app.dialog = None
+        self.app.finish_guide()
+        self.assertTrue(Store(self.store.path).state["onboarded"])
         self.app.complete(True)
         self.assertTrue(self.store.taken())
         self.app.complete(False)
