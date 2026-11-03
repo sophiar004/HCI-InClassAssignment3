@@ -6,6 +6,8 @@ import tkinter as tk
 from datetime import datetime
 
 from haven.model import Store, read_climate
+from haven.camera import CameraPreview
+from haven.sensors import LiveClimate, is_raspberry_pi
 
 BG = "#F3F5EF"
 CARD = "#FFFFFF"
@@ -17,7 +19,7 @@ AMBER = "#80500C"
 
 
 class Haven(tk.Tk):
-    def __init__(self, fullscreen=False, store=None, demo=False, pin="D4"):
+    def __init__(self, fullscreen=False, store=None, climate=None, camera=None, demo=False, pin=4):
         super().__init__()
         # Keep the same physical pixel layout across desktop/Pi font DPI defaults.
         self.tk.call("tk", "scaling", 96 / 72)
@@ -28,8 +30,15 @@ class Haven(tk.Tk):
         self.attributes("-fullscreen", fullscreen)
         self.bind("<Escape>", lambda event: self.attributes("-fullscreen", False))
         self.bind("<F11>", lambda event: self.attributes("-fullscreen", not self.attributes("-fullscreen")))
-        self.protocol("WM_DELETE_WINDOW", self.close_app)
         self.store = store or Store()
+        self.climate = climate
+        self.camera = camera or CameraPreview()
+        self.demo = demo
+        self.camera_job = None
+        self.camera_photo = None
+        self.camera_sequence = -1
+        self.closing = False
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.page = "Home"
         self.dialog = None
         self.climate_labels = []
@@ -37,17 +46,20 @@ class Haven(tk.Tk):
         self.toast_job = None
         self.tick_job = None
 
-        self.sensor_reader = None
-        if not demo and not os.environ.get("HAVEN_SENSOR_FILE"):
+        if self.climate is None and not demo and not os.environ.get("HAVEN_SENSOR_FILE"):
             try:
-                from sensor.dht22_reader import DHT22Reader
-                reader = DHT22Reader(pin=pin, use_pulseio=False)
-                if reader.sensor is not None:
-                    self.sensor_reader = reader
-                    from haven.model import set_live_sensor_reader
-                    set_live_sensor_reader(reader)
+                self.climate = LiveClimate(pin=pin)
+                self.climate.start()
             except Exception:
-                pass
+                try:
+                    from sensor.dht22_reader import DHT22Reader
+                    pin_str = f"D{pin}" if isinstance(pin, int) else str(pin)
+                    reader = DHT22Reader(pin=pin_str, use_pulseio=False)
+                    if reader.sensor is not None:
+                        from haven.model import set_live_sensor_reader
+                        set_live_sensor_reader(reader)
+                except Exception:
+                    pass
 
         header = tk.Frame(self, bg=BG, height=64)
         header.pack(fill="x", padx=20)
@@ -99,6 +111,13 @@ class Haven(tk.Tk):
         return button
 
     def show(self, page):
+        if self.page == "Activity" and page != "Activity":
+            self.camera.stop()
+        if self.camera_job:
+            self.after_cancel(self.camera_job)
+            self.camera_job = None
+        self.camera_photo = None
+        self.camera_sequence = -1
         self.page = page
         self.climate_labels = []
         for widget in self.content.winfo_children():
@@ -176,14 +195,38 @@ class Haven(tk.Tk):
             self.popup("Thank you for checking in", suffix + ("\nContact someone you trust if you need support." if "support" in value else ""), [("Back to Home", lambda: self.show("Home"))])
 
     def activity(self):
-        self.title_block("Recent activity", "Optional history, stored only on this device.")
-        box = self.card(self.content)
-        box.pack(fill="both", expand=True)
+        self.title_block("Activity", "Your camera preview and optional local history.")
+        row = tk.Frame(self.content, bg=BG)
+        row.pack(fill="both", expand=True)
+        row.columnconfigure(0, weight=3, uniform="activity")
+        row.columnconfigure(1, weight=2, uniform="activity")
+        row.rowconfigure(0, weight=1)
+        camera_box = self.card(row)
+        camera_box.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        self.camera_status = self.label(camera_box, "Camera off", 16, True)
+        self.camera_status.pack(anchor="w")
+        preview = tk.Frame(camera_box, bg=INK, height=155)
+        preview.pack(fill="x", pady=(6, 4))
+        preview.pack_propagate(False)
+        self.camera_image = tk.Label(preview, text="Arducam preview", bg=INK, fg="white",
+                                     font=("DejaVu Sans", 13), wraplength=260,
+                                     borderwidth=0, highlightthickness=0, padx=0, pady=0)
+        self.camera_image.pack(fill="both", expand=True)
+        self.camera_detail = self.label(camera_box, "", 10, wraplength=285)
+        self.camera_detail.pack(anchor="w", pady=(0, 4))
+        self.camera_button = self.button(camera_box, "Start camera", self.toggle_camera, font_size=12)
+        self.camera_button.pack(side="bottom", fill="x")
+        box = self.card(row)
+        box.grid(row=0, column=1, sticky="nsew")
+        self.label(box, "Recent history", 14, True).pack(anchor="w", pady=(0, 8))
         if not self.store.state["events"]:
-            self.label(box, "No saved activity yet", 19, True).pack(anchor="w", pady=12)
-            self.label(box, "Turn on activity logging in Settings\nto keep check-ins and reminder actions.", 14, color=MUTED).pack(anchor="w")
-            return
-        text = tk.Text(box, bg=CARD, fg=INK, font=("DejaVu Sans", 13), wrap="word", relief="flat", borderwidth=0, highlightthickness=0, height=7)
+            self.label(box, "No saved activity.\n\nEnable activity logging\nin Settings to keep\ncheck-ins and actions.", 11, color=MUTED).pack(anchor="w")
+        else:
+            self.activity_history(box)
+        self.refresh_camera()
+
+    def activity_history(self, box):
+        text = tk.Text(box, bg=CARD, fg=INK, font=("DejaVu Sans", 11), wrap="word", relief="flat", borderwidth=0, highlightthickness=0, height=7, width=1)
         scrollbar = tk.Scrollbar(box, command=text.yview, width=24)
         scrollbar.pack(side="right", fill="y")
         text.pack(side="left", fill="both", expand=True)
@@ -194,12 +237,49 @@ class Haven(tk.Tk):
             text.insert("end", str(event.get("time", "")).replace("T", "  ") + "\n" + str(event.get("text", "")) + "\n\n")
         text.configure(state="disabled")
 
+    def toggle_camera(self):
+        status = self.camera.snapshot()[0]
+        if self.camera.busy:
+            self.camera.stop()
+        elif status != "Stopping camera":
+            try:
+                from PIL import ImageTk  # Optional; the rest of Haven works without Pillow.
+            except ImportError:
+                self.toast("Install python3-pil.imagetk for camera preview.")
+                return
+            self.camera.start()
+
+    def refresh_camera(self):
+        if self.closing or self.page != "Activity":
+            return
+        status, detail, image, sequence = self.camera.snapshot()
+        self.camera_status.configure(text=status, fg=TEAL if status == "Live camera" else INK)
+        self.camera_detail.configure(text=detail)
+        stopping = status == "Stopping camera"
+        self.camera_button.configure(text="Stopping..." if stopping else "Stop camera" if self.camera.busy else "Start camera",
+                                     state="disabled" if stopping else "normal")
+        if image is not None and sequence != self.camera_sequence:
+            try:
+                from PIL import ImageTk
+                preview = image.copy()
+                preview.thumbnail((max(1, self.camera_image.winfo_width()), 155))
+                self.camera_photo = ImageTk.PhotoImage(preview, master=self)
+                self.camera_image.configure(image=self.camera_photo, text="")
+                self.camera_sequence = sequence
+            except Exception:
+                self.camera.stop()
+                self.toast("Preview failed. Check Pillow installation.")
+        elif image is None:
+            self.camera_image.configure(image="", text="Camera unavailable" if status == "Camera unavailable" else "Camera off" if status == "Camera off" else "Please wait...")
+            self.camera_photo = None
+        self.camera_job = self.after(100, self.refresh_camera)
+
     def settings(self):
         self.title_block("Privacy & settings", "You decide what Haven remembers.")
         box = self.card(self.content)
         box.pack(fill="both", expand=True)
-        self.label(box, "Camera & microphone: off", 17, True).pack(anchor="w")
-        self.label(box, "No recording, cloud connection, or caregiver sharing.", 12, color=MUTED).pack(anchor="w", pady=(4, 12))
+        self.label(box, "Camera: on request / Microphone: off", 16, True).pack(anchor="w")
+        self.label(box, "Preview stops when you leave Activity. No recording or sharing.", 11, color=MUTED).pack(anchor="w", pady=(4, 12))
         self.button(box, "Activity logging: " + ("ON" if self.store.state["logging"] else "OFF"), self.toggle_logging, primary=False).pack(fill="x")
         self.label(box, "Reminder completion is saved so it survives a restart.\nTurning logging off keeps existing history until you clear it.", 11, color=MUTED).pack(anchor="w", pady=8)
         row = tk.Frame(box, bg=CARD)
@@ -254,7 +334,7 @@ class Haven(tk.Tk):
         self.popup("Could not save changes", "Check that your local storage folder is writable.\nChanges in this session may be lost after closing.", [("Okay", lambda: None)])
 
     def guide(self):
-        self.popup("Welcome to Haven", "Home: see room conditions and your daily reminder.\nReminders: mark an example task done or snooze it.\nCheck-in: share how you feel with this device.\nSettings: control local activity history.\n\nSensor values are labeled demo until connected.\nHaven cannot detect falls, stove hazards, or emergencies.", [("Let's begin", self.finish_guide)])
+        self.popup("Welcome to Haven", "Home: see room conditions and your daily reminder.\nReminders: mark an example task done or snooze it.\nCheck-in: share how you feel with this device.\nActivity: start a local camera preview and view history.\nSettings: control local activity history.\n\nDemo readings are labeled. Camera starts only on request.\nHaven cannot detect falls, stove hazards, or emergencies.", [("Let's begin", self.finish_guide)])
 
     def finish_guide(self):
         self.store.state["onboarded"] = True
@@ -296,6 +376,9 @@ class Haven(tk.Tk):
         self.destroy()
 
     def destroy(self):
+        if self.closing:
+            return
+        self.closing = True
         if getattr(self, "tick_job", None):
             try:
                 self.after_cancel(self.tick_job)
@@ -308,37 +391,51 @@ class Haven(tk.Tk):
             except Exception:
                 pass
             self.toast_job = None
-        if getattr(self, "sensor_reader", None):
+        if getattr(self, "camera_job", None):
             try:
-                self.sensor_reader.close()
+                self.after_cancel(self.camera_job)
             except Exception:
                 pass
-            from haven.model import set_live_sensor_reader
-            set_live_sensor_reader(None)
-            self.sensor_reader = None
+            self.camera_job = None
+        if getattr(self, "camera", None):
+            self.camera.stop()
         super().destroy()
+        if getattr(self, "camera", None):
+            self.camera.close()
+        if getattr(self, "climate", None):
+            try:
+                self.climate.close()
+            except Exception:
+                pass
 
     def update_climate(self):
         if not self.climate_labels:
             return
         source, temp, humidity, status = self.climate_labels
-        reading = read_climate()
-        if reading.get("source") == "Live sensor":
+        if self.demo:
+            reading = {"temperature": 22.4, "humidity": 46.0, "source": "Demo data", "available": True}
+        else:
+            reading = self.climate.snapshot() if self.climate else read_climate()
+
+        if reading.get("source") in ("Live DHT22", "Live sensor", "● LIVE SENSOR"):
             source.configure(text="● LIVE SENSOR", fg=TEAL)
         else:
-            source.configure(text=reading["source"], fg=MUTED)
+            source.configure(text=reading.get("source", "Demo data"), fg=MUTED)
 
         if not reading["available"]:
-            temp.configure(text="--.- °C")
-            humidity.configure(text="--.- % RH")
-            if reading.get("source") == "Waiting for sensor reading...":
-                status.configure(text="Waiting for sensor reading...", fg=AMBER)
-            else:
-                status.configure(text="Check sensor connection.\nNo recent reading received.", fg=AMBER)
+            temp.configure(text="-- °C")
+            humidity.configure(text="Humidity unavailable")
+            detail = reading.get("detail")
+            if not detail:
+                if reading.get("source") == "Waiting for sensor reading...":
+                    detail = "Waiting for sensor reading..."
+                else:
+                    detail = "Check sensor connection.\nNo recent reading received."
+            status.configure(text=detail, fg=AMBER)
             return
         t, h = reading["temperature"], reading["humidity"]
         temp.configure(text=f"{t:.1f} °C")
-        humidity.configure(text=f"{h:.1f}% humidity")
+        humidity.configure(text=f"{h:.1f}% humidity" if isinstance(h, float) and h % 1 != 0 else f"{h:.0f}% humidity")
         # Informational prototype bands, not medical or hazard detection thresholds.
         message = "Room conditions are steady"
         if t < 18 or t > 28:
@@ -359,10 +456,34 @@ class Haven(tk.Tk):
 def main():
     parser = argparse.ArgumentParser(description="Haven: local 800x480 touchscreen prototype")
     parser.add_argument("--fullscreen", action="store_true", help="Fill the Raspberry Pi display")
-    parser.add_argument("--demo", action="store_true", help="Force demo mode instead of reading live sensor")
-    parser.add_argument("--pin", default="D4", help="board pin name for DHT22 DATA (default: D4 = GPIO4)")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--live", action="store_true", help="Read a DHT22 directly (automatic on Raspberry Pi)")
+    mode.add_argument("--demo", action="store_true", help="Use labeled demo climate values")
+    parser.add_argument("--sensor-pin", type=int, default=4, help="DHT22 data pin, BCM number (default: 4)")
+    parser.add_argument("--pin", default=None, help="board pin name or number for DHT22 (e.g. D4, alias for --sensor-pin)")
+    parser.add_argument("--camera-index", type=int, default=0, help="Detected camera index from rpicam-hello --list-cameras")
     args = parser.parse_args()
-    Haven(fullscreen=args.fullscreen, demo=args.demo, pin=args.pin).mainloop()
+
+    sensor_pin = args.sensor_pin
+    if args.pin is not None:
+        try:
+            sensor_pin = int(str(args.pin).lstrip("D"))
+        except ValueError:
+            pass
+
+    if not 0 <= sensor_pin <= 27 or args.camera_index < 0:
+        parser.error("Use BCM GPIO 0-27 and a nonnegative camera index")
+    live = not args.demo and (args.live or (is_raspberry_pi() and not os.environ.get("HAVEN_SENSOR_FILE")))
+    climate = LiveClimate(pin=sensor_pin) if live else None
+    if climate:
+        climate.start()
+    camera = CameraPreview(index=args.camera_index)
+    try:
+        Haven(fullscreen=args.fullscreen, climate=climate, camera=camera, demo=args.demo, pin=sensor_pin).mainloop()
+    finally:
+        camera.close()
+        if climate:
+            climate.close()
 
 
 if __name__ == "__main__":
