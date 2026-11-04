@@ -19,6 +19,8 @@ def main():
         sensor = create_sensor(f"D{args.pin}", use_pulseio=False)
     except (RuntimeError, ValueError) as error:
         parser.error(str(error))
+    if sensor is None:
+        parser.error("DHT22 hardware is unavailable; check the driver installation and wiring")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     try:
         while True:

@@ -6,7 +6,8 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from haven import dht22
-from haven.model import Store, read_climate
+from haven.model import Store, read_climate, set_live_sensor_reader
+from sensor.dht22_reader import read_sensor_once
 
 
 class HavenTests(unittest.TestCase):
@@ -90,6 +91,74 @@ class HavenTests(unittest.TestCase):
 
         hardware.exit.assert_called_once_with()
         self.assertFalse(output.exists())
+
+    def test_live_sensor_reader_integration(self):
+        class MockReader:
+            def get_reading(self):
+                return {
+                    "temperature": 25.3,
+                    "humidity": 52.8,
+                    "source": "Live sensor",
+                    "available": True,
+                    "timestamp": 1234567890.0,
+                }
+
+        set_live_sensor_reader(MockReader())
+        try:
+            reading = read_climate()
+            self.assertEqual(reading["source"], "Live sensor")
+            self.assertTrue(reading["available"])
+            self.assertAlmostEqual(reading["temperature"], 25.3)
+            self.assertAlmostEqual(reading["humidity"], 52.8)
+        finally:
+            set_live_sensor_reader(None)
+
+    def test_live_sensor_reader_waiting_or_unavailable(self):
+        class WaitingReader:
+            def get_reading(self):
+                return {
+                    "temperature": None,
+                    "humidity": None,
+                    "source": "Waiting for sensor reading...",
+                    "available": False,
+                    "timestamp": None,
+                }
+
+        set_live_sensor_reader(WaitingReader())
+        try:
+            reading = read_climate()
+            self.assertFalse(reading["available"])
+            self.assertEqual(reading["source"], "Waiting for sensor reading...")
+            self.assertIsNone(reading["temperature"])
+        finally:
+            set_live_sensor_reader(None)
+
+    def test_read_sensor_once_handles_glitches(self):
+        class GlitchySensor:
+            @property
+            def temperature(self):
+                raise RuntimeError("Checksum error")
+
+            @property
+            def humidity(self):
+                return 50.0
+
+        t, h = read_sensor_once(GlitchySensor())
+        self.assertIsNone(t)
+        self.assertIsNone(h)
+
+        class WorkingSensor:
+            @property
+            def temperature(self):
+                return 24.5
+
+            @property
+            def humidity(self):
+                return 48.2
+
+        t, h = read_sensor_once(WorkingSensor())
+        self.assertEqual(t, 24.5)
+        self.assertEqual(h, 48.2)
 
 
 if __name__ == "__main__":

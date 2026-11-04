@@ -1,0 +1,3 @@
+# Install camera/Tk packages using apt; see README.md.
+adafruit-blinka
+adafruit-circuitpython-dht
