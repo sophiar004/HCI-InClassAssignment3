@@ -26,7 +26,6 @@ except (ImportError, NotImplementedError):
     board = None
     adafruit_dht = None
     HAS_HARDWARE = False
-
 # The DHT22 can't be polled faster than once every ~2 seconds.
 MIN_READ_INTERVAL = 2.0
 
@@ -175,7 +174,6 @@ def main():
     if sensor is None:
         print(f"Failed to initialize DHT22 on pin {args.pin}")
         return
-
     interval = max(args.interval, MIN_READ_INTERVAL)
 
     try:

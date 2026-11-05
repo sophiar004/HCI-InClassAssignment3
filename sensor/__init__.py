@@ -1,1 +1,1 @@
-"""Sensor package for DHT22 climate telemetry."""
+"""Hardware sensor helpers for Haven."""

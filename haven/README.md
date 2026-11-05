@@ -47,7 +47,7 @@ uses a consistent 96 DPI Tk font scale to keep the layout stable across systems.
 - Activity: on-demand live Arducam preview beside scrollable local history.
   History retains up to 100 entries, only when enabled.
 - Settings: activity logging toggle, clear-history confirmation, and exit.
-- Help: first-run introduction, available again from Help & guide.
+- Help: six-step first-use tutorial, available again from Help & guide.
 
 The example reminder is fixed at 8 AM; medication editing, audible alarms,
 background reminders when the app is closed, caregiver calls, AI guidance,

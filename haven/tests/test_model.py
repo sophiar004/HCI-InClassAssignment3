@@ -3,8 +3,9 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from haven import dht22
 from haven.model import Store, read_climate, set_live_sensor_reader
 from sensor.dht22_reader import read_sensor_once
 
@@ -68,6 +69,28 @@ class HavenTests(unittest.TestCase):
                 self.assertFalse(self.sensor(temperature_c=value)["available"])
         self.assertFalse(self.sensor(humidity_percent=101)["available"])
         self.assertFalse(self.sensor(timestamp="invalid")["available"])
+
+    def test_dht22_bridge_supplies_ui_model_and_cleans_up(self):
+        output = Path(self.tmp.name) / "climate.json"
+        hardware = Mock()
+        hardware.temperature = 24.5
+        hardware.humidity = 52.0
+
+        def verify_then_stop(_seconds):
+            reading = read_climate(output)
+            self.assertTrue(reading["available"])
+            self.assertEqual(reading["temperature"], 24.5)
+            self.assertEqual(reading["humidity"], 52.0)
+            raise KeyboardInterrupt
+
+        argv = ["dht22", "--output", str(output)]
+        with patch("sys.argv", argv), \
+             patch.object(dht22, "create_sensor", return_value=hardware), \
+             patch.object(dht22.time, "sleep", side_effect=verify_then_stop):
+            dht22.main()
+
+        hardware.exit.assert_called_once_with()
+        self.assertFalse(output.exists())
 
     def test_live_sensor_reader_integration(self):
         class MockReader:

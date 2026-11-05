@@ -6,7 +6,9 @@ Haven is an ambient, smart home assistant that combines localized microclimate t
 This branch adds a local Python/Tkinter prototype for a 7-inch **800 x 480**
 landscape display. It includes a room dashboard, an example medication reminder
 with confirmation/snooze/undo, wellness check-ins, a live Arducam preview in
-Activity, optional local activity history, privacy settings, and a first-use guide.
+Activity, optional local activity history, privacy settings, and a six-step
+first-use tutorial. The tutorial opens on first launch and remains available
+from **Help & guide**.
 
 On Raspberry Pi OS Desktop, open a terminal in this repository and run:
 
